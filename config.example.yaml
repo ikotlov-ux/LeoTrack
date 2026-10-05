@@ -1,0 +1,203 @@
+project:
+  name: "LeoTrack"
+  language: "ru"                 # язык отчёта (поддерживается ru)
+  overwrite: false               # true — писать результаты в results/ поверх; false — новая папка results_<время>
+  seed: 42                       # seed для всех случайных операций
+  cache_dir: null                # кэш тайлов GEE и этапов; null — <папка входных файлов>/LeoTrack_cache (общий для всех папок результатов)
+
+input:
+  # Соответствие колонок входных файлов стандартной схеме (поиск без учёта регистра/пробелов/знаков)
+  column_map:
+    animal_id: ["ID", "animal_id", "individual-local-identifier", "tag-local-identifier", "name", "animal"]
+    latitude: ["LAT", "latitude", "location-lat", "lat", "y_wgs84"]
+    longitude: ["LON", "longitude", "location-long", "lon", "long", "lng", "x_wgs84"]
+    timestamp: ["timestamp", "datetime", "date_time", "study-local-timestamp", "time_utc"]
+    date: ["DATE", "date", "fix_date"]
+    time: ["TIME (UTC +0)", "TIME", "time", "fix_time"]
+    sex: ["sex", "SEX", "animal-sex", "пол"]
+    gps_error_m: ["gps_error_m", "location-error-numerical", "error_m"]
+    hdop: ["hdop", "gps:hdop", "HDOP"]
+    pdop: ["pdop", "gps:pdop", "PDOP"]
+    satellites: ["satellites", "gps:satellite-count", "sats", "nsats"]
+    fix_type: ["fix_type", "gps:fix-type", "fix", "nav"]
+    collar_id: ["collar_id", "tag-local-identifier", "tag_id", "collar"]
+    age_class: ["age_class", "age"]
+    release_date: ["release_date", "release"]
+    speed_collar: ["ground-speed", "speed", "speed_collar"]
+  source_timezone: "UTC"         # если в имени колонки времени есть «UTC +N», смещение берётся из имени
+  source_crs: "EPSG:4326"
+  metadata_file: null            # animals_metadata.csv (animal_id, sex, release_datetime_utc, region, status, ...)
+
+time:
+  local_timezone: "Europe/Moscow"   # местное гражданское время (UTC+3)
+
+crs:
+  work_crs: "EPSG:32638"         # метрическая CRS (UTM 38N покрывает 40–46° в.д. с искажением масштаба <0,2 %)
+
+aoi:
+  bbox: [36.0, 41.0, 49.5, 45.8] # lon_min, lat_min, lon_max, lat_max — ожидаемая область Северного Кавказа
+  polygon_file: null             # необязательный полигон AOI (GPKG/SHP/GeoJSON)
+  buffer_m: 3000                 # технический буфер вокруг треков для загрузки статичных слоёв
+
+regions:
+  method: "longitude_split"      # longitude_split | metadata
+  split_lon: 42.0                # западнее — Западный Кавказ, восточнее — Центральный Кавказ [ЗООЛОГИ]
+  west_name: "West_Caucasus"
+  central_name: "Central_Caucasus"
+
+qc:
+  max_speed_km_h: 8.0            # максимальная правдоподобная расчётная скорость между фиксациями [ЗООЛОГИ]
+  max_speed_min_dt_h: 0.5        # критерий скорости применяется при интервале >= этого значения
+  spike_speed_km_h: 3.0          # «выброс-возврат»: скорость входа и выхода выше порога...
+  spike_angle_deg: 165           # ...и угол разворота больше порога
+  max_hdop: null                 # порог HDOP (если поле есть)
+  min_satellites: null           # минимальное число спутников (если поле есть)
+  min_interval_s: 60             # фиксации ближе по времени считаются дубликатами
+  duplicate_policy: "exclude_conflicting"   # exclude_conflicting — исключать все записи с одним временем и разными координатами; keep_first
+  burst_max_gap_h: 12            # разрыв непрерывного burst [ЗООЛОГИ]
+  qc_iterations: 5
+
+steps:
+  min_step_for_angle_m: 15       # при более коротком шаге угол поворота не определён (шум GPS)
+  path_sample_spacing_m: 30      # шаг дискретизации линии шага для path_* признаков
+  path_max_samples: 400
+
+regularization:
+  enabled: true
+  interval_h: 2.0                # общий интервал для сопоставимости (Leo ~1 ч, Victoria ~2 ч) [ЗООЛОГИ]
+  tolerance_min: 20              # допустимое отклонение фиксации от узла сетки; интерполяции нет
+
+solar:
+  civil_twilight_deg: -6.0
+  sunrise_deg: -0.833
+  periods_A:                     # рабочие периоды зоологов — проверяемая гипотеза [ЗООЛОГИ]
+    - {name: "morning_peak",    start: "03:00", end: "09:00"}
+    - {name: "day_rest",        start: "09:00", end: "20:00"}
+    - {name: "evening_peak",    start: "20:00", end: "01:00"}
+    - {name: "deep_night_rest", start: "01:00", end: "03:00"}
+
+seasons:
+  primary: "calendar"            # calendar (таблица seasons.csv / календарь ниже) | objective (MODIS снег + NDVI)
+  table: null                    # seasons.csv: region,year,season,start,end (start/end: MM-DD или YYYY-MM-DD)
+  default_calendar:              # используется, если нет таблицы [ЗООЛОГИ]
+    - {season: "snow_period",        start: "12-01", end: "03-15"}
+    - {season: "leaf_off_snow_free", start: "03-16", end: "04-30"}
+    - {season: "active_vegetation",  start: "05-01", end: "10-15"}
+    - {season: "leaf_off_snow_free", start: "10-16", end: "11-30"}
+  objective:
+    snow_cover_threshold: 40     # MOD10A1 NDSI_Snow_Cover (0–100), выше — снег
+    snow_window_days: 7
+    snow_fraction_min: 0.5       # доля снежных дней среди валидных за окно
+    min_valid_days: 2
+    ndvi_active_threshold: 0.55  # MOD13Q1 NDVI для активной вегетации [ЗООЛОГИ]
+    smooth_days: 7
+    transition_days: 3
+
+post_release:
+  bins_days: [0, 7, 14, 21, 28, 42, 100000]
+  bin_labels: ["0-7", "8-14", "15-21", "22-28", "29-42", ">42"]
+  key_metrics: ["daily_distance_km", "net_disp_release_km", "straightness", "explored_area_km2", "cluster_time_frac", "mean_speed_m_h"]
+  confirm_days: 14
+  sensitivity_confirm_days: [7, 14, 21]
+  min_segment_days: 7
+  bootstrap: 200
+  max_days: 400
+
+clusters:
+  radius_m: 150
+  containment: 0.95              # p95 расстояний до центра <= radius_m
+  min_duration_h: 24
+  allowed_gap_h: 6               # максимальный пропуск внутри кластера
+  max_excursion_h: 8             # выход из радиуса с возвращением, не дольше
+  min_fix_fraction: 0.5          # минимальная доля ожидаемых фиксаций
+  merge_distance_m: 150          # объединение соседних эпизодов с близкими центрами
+  merge_gap_h: 6
+  bootstrap: 500
+  sensitivity_radii: [100, 150, 200]
+  sensitivity_durations: [12, 24, 36]
+
+daily:
+  min_coverage: 0.75             # доля суток, покрытая валидными шагами
+  min_fix_fraction: 0.6          # доля ожидаемых фиксаций
+
+behavior:
+  rest_max_speed_m_h: 50         # простой режим: покой/медленно [ЗООЛОГИ]
+  directed_min_speed_m_h: 500    # направленное перемещение
+  directed_max_abs_turn_deg: 90
+  hmm:
+    enabled: true
+    n_states: [2, 3]
+    primary_n_states: 3          # число состояний задаёт исследователь, AIC/BIC — только справочно
+    min_steps: 200
+    max_iter: 100
+    tol: 1.0e-6
+
+terrain:
+  tpi_small_radius_m: 150
+  tpi_large_radius_m: 750
+  flat_slope_deg: 5              # для классификации форм рельефа
+  aspect_flat_slope_deg: 3       # экспозиция flat
+  elevation_band_m: 500
+  buffer_radii_m: [30, 100, 250, 500, 1000]
+  buffer_continuous: ["elevation", "slope_deg", "tri", "tpi_large"]
+
+habitat:
+  reclass_table: null            # habitat_reclass.csv: code,habitat[,min_elev,max_elev]
+  regional_raster: null          # пользовательская региональная карта растительности (приоритет выше WorldCover)
+  regional_reclass: null         # CSV: code,habitat
+
+issf:
+  enabled: true
+  n_available: 10
+  covariates: ["elevation_z", "slope_z", "tri_z", "tpi_large_z", "northness", "eastness", "hab_forest", "hab_open"]
+  min_strata: 100
+  folds: 5
+  max_vif: 10
+
+gee:
+  enabled: true
+  project: null                  # Google Cloud Project ID, зарегистрированный для Earth Engine
+  auth_mode: "localhost"         # localhost | notebook | gcloud | service_account
+  service_account_key: null
+  chunk_size: 400                # максимум точек в одном запросе (порция = подряд идущие сутки одного животного)
+  chunk_days: 10                 # максимум суток в порции; при ошибке GEE порция делится пополам
+  threads: 4
+  max_retries: 5
+  dynamic_points: "all"          # all | regular (только регуляризованные фиксации)
+  tile_size_m: 10000
+  tile_overlap_m: 2500           # >= tpi_large_radius_m + max(buffer_radii_m)
+  dem_scale_m: 30
+  wc_scale_m: 10
+  windows_days: [3, 7, 15, 30]   # симметричные окна ±N суток для S2/Landsat NDVI/NDSI
+  dw_windows_days: [7, 15]       # окна Dynamic World
+  snow_windows_days: [1, 3, 7, 14, 30]   # ретроспективные окна MOD10A1
+  snow_lookback_days: 60
+  landsat_before: "2019-01-01"   # Landsat C2 L2 для дат до этой (ранний период без S2 L2A)
+  sources:
+    dem: "COPERNICUS/DEM/GLO30_2024_1"
+    dem_band: "DEM"
+    dem_fallback: "NASA/NASADEM_HGT/001"
+    worldcover: "ESA/WorldCover/v200"
+    dynamic_world: "GOOGLE/DYNAMICWORLD/V1"
+    s2: "COPERNICUS/S2_SR_HARMONIZED"
+    landsat: ["LANDSAT/LT05/C02/T1_L2", "LANDSAT/LE07/C02/T1_L2", "LANDSAT/LC08/C02/T1_L2", "LANDSAT/LC09/C02/T1_L2"]
+    modis_snow: "MODIS/061/MOD10A1"
+    modis_ndvi: "MODIS/061/MOD13Q1"
+    era5: "ECMWF/ERA5_LAND/DAILY_AGGR"   # суточные средние snow_depth, SWE, temperature_2m
+
+privacy:
+  public_mode: false             # огрубление координат и маскирование мест выпуска и кластеров
+  round_m: 1000
+  mask_release_radius_m: 3000
+  mask_clusters: true
+
+stats:
+  bootstrap: 1000
+  min_animals_group: 2
+
+extra_vectors: {}                # name: путь к слою (дороги, поселения, ООПТ) -> dist_<name>_m
+
+report:
+  dpi: 130
+  max_table_rows: 40
+  map_max_points: 8000

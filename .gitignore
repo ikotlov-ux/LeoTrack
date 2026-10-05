@@ -1,0 +1,17 @@
+# Данные треков и результаты не публикуются (координаты редкого вида)
+*.xlsx
+*.xls
+*.csv
+*.gpx
+*.gpkg
+*.geojson
+*.tif
+*.tiff
+*.parquet
+LeoTrack_cache/
+cache/
+results_*/
+*.json
+!config.example.yaml
+__pycache__/
+.ipynb_checkpoints/

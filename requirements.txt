@@ -1,0 +1,15 @@
+pandas>=2.0
+numpy
+scipy
+pyproj
+shapely>=2.0
+matplotlib
+openpyxl
+pyyaml
+tzdata
+earthengine-api
+rasterio
+statsmodels
+scikit-learn
+folium
+plotly
